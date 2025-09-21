@@ -28,7 +28,7 @@ from aiogram import BaseMiddleware
 
 
 # === Настройки ===
-BOT_TOKEN = "7790035070:AAG58656XcVPfCTeqOrtsKMoEjCaQc57pt8"
+BOT_TOKEN = "8441491418:AAFkXB6TjuBPtPj-zD2vIsaMiI0NyCpX8Uk"
 ADMIN_IDS = [7183114490, 6556149989]
 ADMIN_SESSION_TIMEOUT = 3600
 ADMIN_PASSWORD = "admin123"
@@ -2575,3 +2575,4 @@ async def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
+
