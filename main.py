@@ -28,7 +28,7 @@ from aiogram import BaseMiddleware
 
 
 # === Настройки ===
-BOT_TOKEN = "8441491418:AAFkXB6TjuBPtPj-zD2vIsaMiI0NyCpX8Uk"
+BOT_TOKEN = "7790035070:AAG58656XcVPfCTeqOrtsKMoEjCaQc57pt8"
 ADMIN_IDS = [7183114490, 6556149989]
 ADMIN_SESSION_TIMEOUT = 3600
 ADMIN_PASSWORD = "admin123"
@@ -1679,13 +1679,13 @@ async def admin_view_bug_reports(callback: types.CallbackQuery, state: FSMContex
     if callback.from_user.id not in ADMIN_IDS or time.time() > admin_sessions.get(callback.from_user.id, 0):
         await callback.message.answer("Сессия истекла или у вас нет прав.")
         return
-    await callback.message.delete()
+
 
     reports = db.get_unreviewed_bug_reports()
     if not reports:
         await callback.message.answer("Новых обращений в поддержку нет.", reply_markup=get_admin_panel_keyboard())
         return
-
+    await callback.message.delete()
     await state.update_data(bug_reports=reports, bug_report_index=0)
     await show_bug_report(callback.message, state)
 
