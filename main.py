@@ -1679,13 +1679,13 @@ async def admin_view_bug_reports(callback: types.CallbackQuery, state: FSMContex
     if callback.from_user.id not in ADMIN_IDS or time.time() > admin_sessions.get(callback.from_user.id, 0):
         await callback.message.answer("Сессия истекла или у вас нет прав.")
         return
-
+    await callback.message.delete()
 
     reports = db.get_unreviewed_bug_reports()
     if not reports:
         await callback.message.answer("Новых обращений в поддержку нет.", reply_markup=get_admin_panel_keyboard())
         return
-    await callback.message.delete()
+
     await state.update_data(bug_reports=reports, bug_report_index=0)
     await show_bug_report(callback.message, state)
 
@@ -1955,7 +1955,7 @@ async def process_reaction(callback: types.CallbackQuery, state: FSMContext):
     except Exception as e:
         error_logger.error(f"Error processing reaction for user {callback.from_user.id}: {e}")
         await callback.message.answer("Произошла ошибка, попробуйте еще раз.")
-
+        
 @dp.callback_query(F.data.startswith("view_liker:"))
 @rate_limit()
 async def view_liker_profile(callback: types.CallbackQuery, state: FSMContext):
