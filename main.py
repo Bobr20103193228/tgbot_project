@@ -33,9 +33,6 @@ ADMIN_IDS = [7183114490, 6556149989]
 ADMIN_SESSION_TIMEOUT = 3600
 ADMIN_PASSWORD = "admin123"
 
-# Интервал для проверки лайков (в секундах)
-NOTIFICATION_INTERVAL = 3 * 3600
-
 GENDERS = ["Мужской", "Женский", "Другое"]
 SEEKING_OPTIONS = ["Мужчин", "Женщин", "Всех"]
 
@@ -202,41 +199,6 @@ async def cleanup_caches():
         for uid in expired_activities:
             del user_activity_cache[uid]
         await asyncio.sleep(60)
-
-
-async def send_notifications():
-    while True:
-        await asyncio.sleep(NOTIFICATION_INTERVAL)
-        now = dt.datetime.now()
-        check_time = (now - timedelta(hours=3)).isoformat()
-
-        with sqlite3.connect(db.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT p.user_id, COUNT(r.id) as like_count
-                FROM profiles p
-                JOIN reactions r ON p.id = r.to_profile_id
-                WHERE r.reaction_type = 'like' AND r.reaction_date > ?
-                GROUP BY p.user_id
-                HAVING like_count >= 1
-            ''', (check_time,))
-            notifications = cursor.fetchall()
-            info_logger.info(f"Found {len(notifications)} users to notify about likes")
-
-            for user_id, like_count in notifications:
-                if db.is_notification_enabled(user_id):
-                    try:
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="👀 Посмотреть лайки", callback_data="view_likes")]
-                        ])
-                        await bot.send_message(
-                            user_id,
-                            f"🔔 За последние 3 часа вашу анкету лайкнули {like_count} раз!",
-                            reply_markup=keyboard
-                        )
-                        info_logger.info(f"Notification sent: user_id={user_id}, likes={like_count}")
-                    except Exception as e:
-                        error_logger.error(f"Failed to send notification to user_id={user_id}: {e}")
 
 
 async def check_user_blocks():
@@ -1898,21 +1860,82 @@ async def process_reaction(callback: types.CallbackQuery, state: FSMContext):
 
         db.add_reaction(from_user_id, profile_id, reaction_type)
 
+        # НОВАЯ ЛОГИКА ДЛЯ ЛАЙКОВ - заменяет весь старый блок
         if reaction_type == "like":
-            user_profile = db.get_profile_by_user_id(from_user_id)
-            if user_profile and db.check_match(user_profile['id'], profile_id):
-                info_logger.info(f"MATCH! user1={from_user_id}, profile2={profile_id}")
-                partner_profile = db.get_profile_by_id(profile_id)
-                partner_user_id = partner_profile['user_id']
+            # Получаем профиль, которому поставили лайк (получатель)
+            to_profile = db.get_profile_by_id(profile_id)
+            if not to_profile:
+                await callback.answer("Профиль не найден", show_alert=True)
+                await callback.message.delete()
+                return
 
-                my_username = callback.from_user.username
-                partner_username = (await bot.get_chat(partner_user_id)).username
+            to_user_id = to_profile['user_id']
 
-                await bot.send_message(from_user_id,
-                                       f"🔥 У вас взаимная симпатия с {partner_profile['name']}! (@{partner_username})")
-                await bot.send_message(partner_user_id,
-                                       f"🔥 У вас взаимная симпатия с {user_profile['name']}! (@{my_username})")
+            # Получаем профиль лайкнувшего пользователя
+            from_profile = db.get_profile_by_user_id(from_user_id)
+            if not from_profile:
+                await callback.answer("Ваша анкета не найдена", show_alert=True)
+                await callback.message.delete()
+                return
 
+            from_profile_id = from_profile['id']
+
+            # Проверяем, лайкнул ли получатель уже профиль лайкнувшего (взаимный лайк)
+            is_reciprocal = db.check_match(from_profile_id, profile_id)
+
+            if is_reciprocal:
+                # 🔥 ВЗАИМНЫЙ ЛАЙК
+                info_logger.info(f"Взаимный лайк! user1={from_user_id}, user2={to_user_id}")
+
+                # Получаем username для обоих пользователей
+                try:
+                    my_chat = await bot.get_chat(from_user_id)
+                    partner_chat = await bot.get_chat(to_user_id)
+                    my_username = my_chat.username or "без username"
+                    partner_username = partner_chat.username or "без username"
+                except Exception as e:
+                    error_logger.error(f"Error getting usernames: {e}")
+                    my_username = "без username"
+                    partner_username = "без username"
+
+                # Создаем HTML-ссылки на профили
+                my_name_link = f'<a href="tg://user?id={from_user_id}">{from_profile["name"]}</a>'
+                partner_name_link = f'<a href="tg://user?id={to_user_id}">{to_profile["name"]}</a>'
+
+                # Отправляем уведомления о взаимной симпатии ОБОИМ пользователям
+                await bot.send_message(
+                    from_user_id,
+                    f"🔥 Взаимная симпатия! Ты понравился {partner_name_link}! (@{partner_username})",
+                    parse_mode=ParseMode.HTML
+                )
+                await bot.send_message(
+                    to_user_id,
+                    f"🔥 Взаимная симпатия! Ты понравился {my_name_link}! (@{my_username})",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                # 🔔 ПЕРВЫЙ ЛАЙК (не взаимный)
+                info_logger.info(f"Первый лайк: from_user_id={from_user_id}, to_user_id={to_user_id}")
+
+                # Отправляем уведомление получателю о новом лайке с кнопкой просмотра анкеты
+                if db.is_notification_enabled(to_user_id):
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👀 Просмотреть анкету",
+                                              callback_data=f"view_liker:{from_profile_id}")]
+                    ])
+                    try:
+                        await bot.send_message(
+                            to_user_id,
+                            f"🔔 {from_profile['name']} лайкнул твою анкету!",
+                            reply_markup=keyboard
+                        )
+                        info_logger.info(f"Like notification sent to {to_user_id} from {from_user_id}")
+                    except TelegramForbiddenError:
+                        info_logger.info(f"User {to_user_id} blocked the bot, cannot send like notification")
+                    except Exception as e:
+                        error_logger.error(f"Failed to send like notification to {to_user_id}: {e}")
+
+        # Общая логика для всех реакций (удаление сообщения, переход к следующей анкете)
         await callback.message.delete()
         await callback.answer(f"Ваша реакция: {reaction_type}", show_alert=False)
 
@@ -1932,6 +1955,35 @@ async def process_reaction(callback: types.CallbackQuery, state: FSMContext):
     except Exception as e:
         error_logger.error(f"Error processing reaction for user {callback.from_user.id}: {e}")
         await callback.message.answer("Произошла ошибка, попробуйте еще раз.")
+
+@dp.callback_query(F.data.startswith("view_liker:"))
+@rate_limit()
+async def view_liker_profile(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        profile_id = int(callback.data.split(":")[1])
+        profile = db.get_profile_by_id(profile_id)
+        if not profile:
+            await callback.answer("Анкета не найдена.", show_alert=True)
+            return
+
+        profile_text = (
+            f"Имя: {profile['name']}, Возраст: {profile['age']}\n"
+            f"Район: {profile['district']}\n"
+            f"Тип встречи: {profile['meeting_type']}\n\n"
+            f"О себе: {profile['about_text']}"
+        )
+
+        await bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo=profile['photo_file_id'],
+            caption=profile_text,
+            reply_markup=get_reaction_keyboard(profile_id)
+        )
+        await callback.message.delete()
+        await callback.answer()
+    except Exception as e:
+        error_logger.error(f"Error viewing liker profile: {e}")
+        await callback.answer("Произошла ошибка.", show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("report:"))
@@ -2278,7 +2330,6 @@ async def refresh_my_stats(callback: types.CallbackQuery, state: FSMContext):
         error_logger.error(f"Error refreshing stats for {user_id}: {e}")
         await callback.answer("Ошибка обновления.")
 
-
 # --- Конец новых хендлеров ---
 
 @dp.message(F.text == "💬 Анонимный чат")
@@ -2503,7 +2554,6 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         asyncio.create_task(cleanup_rate_limits_and_sessions())
         asyncio.create_task(cleanup_caches())
-        asyncio.create_task(send_notifications())
         asyncio.create_task(check_user_blocks())
         asyncio.create_task(check_for_chat_partners())
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
