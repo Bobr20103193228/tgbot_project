@@ -1,3 +1,4 @@
+
 import asyncio
 import os
 import random
@@ -26,7 +27,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram import BaseMiddleware
 
 # === Настройки ===
-BOT_TOKEN = "7790035070:AAG58656XcVPfCTeqOrtsKMoEjCaQc57pt8"
+BOT_TOKEN = "8441491418:AAFkXB6TjuBPtPj-zD2vIsaMiI0NyCpX8Uk"
 ADMIN_IDS = [7183114490, 6556149989]
 ADMIN_SESSION_TIMEOUT = 3600
 ADMIN_PASSWORD = "admin123"
