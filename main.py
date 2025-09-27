@@ -25,10 +25,8 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.base import StorageKey
 from aiogram import BaseMiddleware
 
-
-
 # === Настройки ===
-BOT_TOKEN = "8441491418:AAFkXB6TjuBPtPj-zD2vIsaMiI0NyCpX8Uk"
+BOT_TOKEN = "7790035070:AAG58656XcVPfCTeqOrtsKMoEjCaQc57pt8"
 ADMIN_IDS = [7183114490, 6556149989]
 ADMIN_SESSION_TIMEOUT = 3600
 ADMIN_PASSWORD = "admin123"
@@ -84,7 +82,8 @@ user_action_handler = RotatingFileHandler(
     encoding='utf-8'
 )
 # basic formatter for user actions: include user context if available via logging Filter
-user_action_handler.setFormatter(logging.Formatter('%(asctime)s - USER[%(user_id)s:%(username)s] - %(message)s', datefmt='%Y-%m-%d %H:%M'))
+user_action_handler.setFormatter(
+    logging.Formatter('%(asctime)s - USER[%(user_id)s:%(username)s] - %(message)s', datefmt='%Y-%m-%d %H:%M'))
 user_action_logger.addHandler(user_action_handler)
 # Also log to console so devs see actions while running locally
 try:
@@ -650,15 +649,17 @@ class Database:
 
             return is_liked_by_them
 
-    def get_random_profiles(self, user_id: int, filters: dict = None, limit: int = 10) -> List[dict]:
+    def get_random_profiles(self, user_id: int, limit: int = 10) -> List[dict]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # Берём данные пользователя
             cursor.execute("SELECT gender, seeking, age FROM profiles WHERE user_id = ? AND is_active = 1", (user_id,))
             user_data = cursor.fetchone()
             if not user_data:
                 return []
             user_gender, user_seeking, user_age = user_data
 
+            # Базовый запрос: все активные анкеты, кроме своей и заблокированных
             query = '''
                 SELECT p.id, p.user_id, p.name, p.age, p.district, p.meeting_type,
                        p.about_text, p.photo_file_id, p.gender
@@ -667,33 +668,29 @@ class Database:
                 WHERE p.user_id != ? AND p.is_active = 1 AND u.is_blocked = 0
                   AND p.id NOT IN (
                     SELECT r.to_profile_id FROM reactions r
-                    WHERE r.from_user_id = ?
+                    WHERE r.from_user_id = ? AND r.reaction_type = 'like'
                   )
             '''
             params = [user_id, user_id]
 
+            # Фильтрация по «кого ищу»
             if user_seeking == "Мужчин":
                 query += " AND p.gender = 'Мужской'"
             elif user_seeking == "Женщин":
                 query += " AND p.gender = 'Женский'"
 
+            # Чтобы совпадало по «кого ищет другой»
             seeking_map = {"Мужской": "Мужчин", "Женский": "Женщин"}
             user_gender_as_seeking = seeking_map.get(user_gender)
             if user_gender_as_seeking:
                 query += f" AND (p.seeking = 'Всех' OR p.seeking = ?)"
                 params.append(user_gender_as_seeking)
 
+            # Лёгкая фильтрация по возрасту (оставим +-3 года)
             query += " AND p.age BETWEEN ? AND ?"
             params.extend([user_age - 3, user_age + 3])
 
-            if filters:
-                if filters.get('meeting_type'):
-                    query += " AND p.meeting_type = ?"
-                    params.append(filters['meeting_type'])
-                if filters.get('district'):
-                    query += " AND p.district = ?"
-                    params.append(filters['district'])
-
+            # Случайный порядок + лимит
             query += " ORDER BY RANDOM() LIMIT ?"
             params.append(limit)
 
@@ -1184,6 +1181,7 @@ db = Database()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+
 # --- Middleware: log every action and update online status ---
 
 # --- Decorator for user action logging ---
@@ -1193,12 +1191,17 @@ def log_action(action: str):
             try:
                 user = getattr(event, "from_user", None)
                 if user:
-                    user_action_logger.info(action, extra={'user_id': user.id, 'username': getattr(user, 'username', '')})
+                    user_action_logger.info(action,
+                                            extra={'user_id': user.id, 'username': getattr(user, 'username', '')})
             except Exception:
                 pass
             return await func(event, *args, **kwargs)
+
         return wrapper
+
     return decorator
+
+
 class UserActionMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         try:
@@ -1213,7 +1216,8 @@ class UserActionMiddleware(BaseMiddleware):
                 # log the message text (shortened)
                 try:
                     txt = (event.text or '')[:800]
-                    user_action_logger.info(f"message -> {txt}", extra={'user_id': user.id, 'username': getattr(user, 'username', '')})
+                    user_action_logger.info(f"message -> {txt}",
+                                            extra={'user_id': user.id, 'username': getattr(user, 'username', '')})
                 except Exception:
                     pass
             elif isinstance(event, types.CallbackQuery):
@@ -1223,7 +1227,8 @@ class UserActionMiddleware(BaseMiddleware):
                 except Exception:
                     pass
                 try:
-                    user_action_logger.info(f"callback_query -> {event.data}", extra={'user_id': user.id, 'username': getattr(user, 'username', '')})
+                    user_action_logger.info(f"callback_query -> {event.data}",
+                                            extra={'user_id': user.id, 'username': getattr(user, 'username', '')})
                 except Exception:
                     pass
         except Exception as e:
@@ -1233,6 +1238,7 @@ class UserActionMiddleware(BaseMiddleware):
             except Exception:
                 pass
         return await handler(event, data)
+
 
 # Register middleware for messages and callback queries (if dp is already defined)
 try:
@@ -1244,8 +1250,6 @@ except Exception:
         dp.update.middleware(UserActionMiddleware())
     except Exception:
         pass
-
-
 
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -1419,6 +1423,7 @@ async def get_current_profile_data(user_id: int):
         return profile_info, profile['photo_file_id']
     return None, None
 
+
 @log_action("Entered cancel")
 @dp.message(Command("cancel"))
 async def cancel(message: types.Message, state: FSMContext):
@@ -1426,6 +1431,7 @@ async def cancel(message: types.Message, state: FSMContext):
     username = message.from_user.username or "Без username"
     info_logger.info(f"Command /cancel from user_id={user_id}, username={username}")
     await state.clear()
+
 
 @log_action("Started bot (/start)")
 @dp.message(Command("start"))
@@ -1821,10 +1827,15 @@ async def display_profile(message: types.Message, state: FSMContext):
     profiles = data.get('profiles')
     current_index = data.get('current_profile_index', 0)
 
-    if not profiles or current_index >= len(profiles):
-        await message.answer("Анкеты закончились! 😔", reply_markup=get_main_menu_keyboard())
+    if not profiles:
+        await message.answer("😔 Пока нет доступных анкет.", reply_markup=get_main_menu_keyboard())
         await state.clear()
         return
+
+    # 🔄 если дошли до конца — начинаем заново
+    if current_index >= len(profiles):
+        current_index = 0
+        await state.update_data(current_profile_index=0)
 
     profile = profiles[current_index]
     profile_id = profile['id']
@@ -1845,9 +1856,10 @@ async def display_profile(message: types.Message, state: FSMContext):
         )
     except Exception as e:
         error_logger.error(f"Failed to send photo for profile_id={profile_id}: {e}")
-        await message.answer("Не удалось отобразить анкету. Пробуем следующую.")
+        # пропускаем проблемную анкету и идём дальше
         await state.update_data(current_profile_index=current_index + 1)
         await display_profile(message, state)
+
 
 
 @dp.callback_query(F.data.startswith(("like:", "dislike:", "block:")))
@@ -1955,7 +1967,8 @@ async def process_reaction(callback: types.CallbackQuery, state: FSMContext):
     except Exception as e:
         error_logger.error(f"Error processing reaction for user {callback.from_user.id}: {e}")
         await callback.message.answer("Произошла ошибка, попробуйте еще раз.")
-        
+
+
 @dp.callback_query(F.data.startswith("view_liker:"))
 @rate_limit()
 async def view_liker_profile(callback: types.CallbackQuery, state: FSMContext):
@@ -2330,6 +2343,7 @@ async def refresh_my_stats(callback: types.CallbackQuery, state: FSMContext):
         error_logger.error(f"Error refreshing stats for {user_id}: {e}")
         await callback.answer("Ошибка обновления.")
 
+
 # --- Конец новых хендлеров ---
 
 @dp.message(F.text == "💬 Анонимный чат")
@@ -2518,8 +2532,6 @@ async def back_to_main_menu_message(message: types.Message, state: FSMContext):
     await message.answer("Главное меню", reply_markup=get_main_menu_keyboard())
 
 
-
-
 @log_action("Viewed bot statistics")
 @dp.message(F.text == "ℹ️ О боте")
 @rate_limit()
@@ -2530,7 +2542,8 @@ async def about_bot(message: types.Message, state: FSMContext = None):
         online_count = db.get_online_users_count() if hasattr(db, 'get_online_users_count') else 0
         district_stats = db.get_district_statistics() if hasattr(db, 'get_district_statistics') else {}
 
-        district_text = "\n".join([f"- {d}: {s['users']} анкет, {s['online']} онлайн" for d, s in district_stats.items()])
+        district_text = "\n".join(
+            [f"- {d}: {s['users']} анкет, {s['online']} онлайн" for d, s in district_stats.items()])
 
         text = (
             f"📊 Статистика бота:\n"
@@ -2548,6 +2561,8 @@ async def about_bot(message: types.Message, state: FSMContext = None):
         except Exception:
             pass
         await message.answer("Не удалось получить статистику. Попробуйте позже.")
+
+
 async def main():
     try:
         info_logger.info("Starting bot...")
@@ -2575,4 +2590,3 @@ async def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
-
